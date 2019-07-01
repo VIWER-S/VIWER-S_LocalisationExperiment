@@ -1,0 +1,749 @@
+
+classdef LocalisationExperiment < handle
+    
+    properties
+        
+        bParallel = true;
+        bSave = true;
+        bRealSource = true;
+        bRealRIR = true;
+        bEmail = false;
+        
+        hCluster;
+        hJob;
+        hTask;
+        
+        mColors;
+        
+        hFig_Main;
+        hPanel_Status;
+        hPanel_Controls;
+        
+        hButton_Start;
+        hButton_Stop;
+        
+        hImage_Status;
+        
+        hLabel_Message;
+        hLabel_Counter;
+        
+        sTitle_FigMain = 'LocalisationExperiment';
+        sTitle_Panel_Status = 'Status';
+        sTitle_Panel_Controls = 'Controls';
+        sTitle_Button_Start = 'Start';
+        sTitle_Button_Stop = 'Stop';
+        sTitle_Text_Start = 'Ready'
+        sTitle_Text_Error = 'Error';
+        sTitle_Text_Termination = 'Experiment terminated by user.'
+        
+        bRun = false;
+        bVerbose = false;
+        
+        mSignal;
+        mSignal_RAW;
+        mWindow;
+        nFs_Source;
+        nFs_Desired = 8000;
+        
+        sFolder_Output = 'output';
+        
+        % Sound velocity (m/s)
+        nC = 344;
+        % Room dimensions [x y z] (m)
+        vRoomDimensions = [7 4 3];
+        % Distance between source and reference point (m)
+        nDistance = 3;
+        % Reference point of receiver array [x y z] (m)
+        vZero = [0, 0.5, 1];
+        % Reverberation time (s)
+        nBeta = 0.12;
+        % Number of samples in RIR
+        nSamples = 1024;
+        % Padding Size
+        nPad;
+        
+        vSRC = [1, 0];
+        nSRC_Var;
+        
+        vRIR = [1, 0];
+        nRIR_Var;
+        
+        % Block Length of Fourier Transform
+        vFFTLen = [2^6, 2^7, 2^8];
+        nFFTLen_Var;
+        
+        % Length of Audio Material
+        vLen_s = [0.1:0.1:1];
+        nLen_Var;
+        
+        % Signal-To-Noise Ratio
+        vSNR = [30, 20, 10];
+        nSNR_Var;
+        
+        % Number of Sensors in Array
+        vSensors = [4, 6, 8, 10, 12, 14, 16];
+        nSensors_Var;
+        %         nSensors;
+        % Cooridnates of Sensors in Array
+        mSensors;
+        
+        % Directions of arrival
+        vAzimuth;
+        % Number of Azimuth Angles in Simulation
+        nAzimuth_Var = 13;
+        
+        stPlotParams;
+        
+        sFileName_Signal = ''
+        
+        stHRTF_Positions;
+        
+        % Current Azimuth
+        nAngleAzimuth;
+        
+        cArrayName = {'CIRCLE', 'DUALLOG', 'DUOLOG', 'VIKK', 'LIN', 'LOG', 'DUALLIN'};
+        nArrayName_Var;
+        
+        % Estimate Vectors;
+        vAngles_SRPPHAT;
+        vAngles_diagonalUnloading;
+        
+        Counter;
+        Email;
+        sEmail_Adress = 'ulrik.kowalk@gmx.de'
+        sEmail_Head_Success = 'Experiment finished.';
+        sEmail_Head_Error = 'An Error occurred'
+        sEmail_Message_Success = 'The Experiment was completed in %s.';
+        sEmail_Message_Error = 'The Experiment was terminated due to an Error:';
+        
+        nHeight_FigMain = 480;
+        nWidth_FigMain = 800;
+        nWidth_Panel_Status;
+        nWidth_Panel_Controls;
+        vScreenSize;
+        
+        nDivision_Horizontal = 20;
+        nDivision_Vertical = 15;
+        nTextHeight = 20;
+        nTitleHeight = 20;
+        nButtonHeight = 30;
+        nButtonWidth = 76;
+        nOffset_Vertical = 15;
+        nPad_Axes = 10;
+        
+        nCalculatingWidth = 180;
+        nCalculatingHeight = 20;
+        
+        nExperiments_Total;
+        
+        nRelation;
+        nNumHorizontal;
+        nNumVertical;
+        nElement_Width;
+        nElement_Height;
+        
+        mStatus;
+        hAxes_Status;
+        
+        
+        
+    end
+    
+    methods
+        
+        function obj = LocalisationExperiment()
+            
+            addpath(genpath('RIR-Generator'));
+            addpath(genpath('AES2017NoiseSynthesis'));
+            addpath(genpath('Carlos'));
+            addpath(genpath('data'));
+            addpath(genpath('functions'));
+            addpath(genpath('email'));
+            addpath(genpath(obj.sFolder_Output));
+            
+            set(0,'Units','Pixels') ;
+            obj.vScreenSize = get(0, 'Screensize');
+            
+            obj.mColors = getColors();
+            
+            obj.nWidth_Panel_Controls = 2*obj.nDivision_Horizontal+obj.nButtonWidth;
+            obj.nWidth_Panel_Status = obj.nWidth_FigMain - obj.nWidth_Panel_Controls;
+            
+            obj.stHRTF_Positions = load('Carlos_202.mat');
+            
+            obj.stPlotParams = struct('Width', 16/2.54, ...
+                'Height', 12/2.54, ...
+                'AxesLineWidth', 0.75, ...
+                'FontSize',  9, ...
+                'LineWidth', 1.5, ...
+                'MarkerSize',  8);
+            
+            % Build parallel Cluster
+            if obj.bParallel
+                if isempty(gcp('nocreate'))
+                    myCluster = parcluster();
+                    myCluster.NumWorkers = 12;
+                    myPool = parpool(myCluster);
+                end
+            end
+            
+            % Number of Experiment Variables
+            obj.nArrayName_Var  = length(obj.cArrayName);
+            obj.nLen_Var        = length(obj.vLen_s);
+            obj.nSNR_Var        = length(obj.vSNR);
+            obj.nSensors_Var    = length(obj.vSensors);
+            obj.nFFTLen_Var     = length(obj.vFFTLen);
+            obj.nSRC_Var        = length(obj.vSRC);
+            obj.nRIR_Var        = length(obj.vRIR);
+            
+            obj.vAzimuth = linspace(0, 180, obj.nAzimuth_Var)/180*pi;
+            
+            obj.nExperiments_Total = obj.nArrayName_Var*obj.nLen_Var*obj.nSNR_Var*...
+                obj.nSensors_Var*obj.nFFTLen_Var*obj.nSRC_Var*obj.nRIR_Var;
+            
+            obj.nRelation = obj.nWidth_Panel_Status/(obj.nHeight_FigMain - obj.nTextHeight);
+            obj.nNumVertical = ceil(sqrt(obj.nExperiments_Total/obj.nRelation));
+            obj.nNumHorizontal = ceil(obj.nNumVertical*obj.nRelation);
+            
+            obj.nElement_Width = obj.nWidth_Panel_Status/obj.nNumHorizontal;
+            obj.nElement_Height = (obj.nHeight_FigMain - obj.nTextHeight)/obj.nNumVertical;
+            obj.mStatus = zeros(obj.nNumHorizontal, obj.nNumVertical)';
+            
+            % Instantiate external Counter
+            obj.Counter = Counter(obj.nExperiments_Total);
+            obj.Counter.setInfo('Experiment');
+            
+            % Set up an email connection
+            obj.Email = Email();
+            
+            obj.createGUI();
+            
+        end
+        
+        function [] = createGUI(obj)
+            
+            % Main Window
+            
+            obj.hFig_Main = uifigure();
+            obj.hFig_Main.Position = [(obj.vScreenSize(3)-obj.nWidth_FigMain)/2,...
+                (obj.vScreenSize(4)-obj.nHeight_FigMain)/2, obj.nWidth_FigMain, obj.nHeight_FigMain];
+            obj.hFig_Main.Name = obj.sTitle_FigMain;
+            obj.hFig_Main.Resize = 'Off';
+            
+            % Panels
+            
+            obj.hPanel_Status = uipanel('Parent', obj.hFig_Main);
+            obj.hPanel_Status.Title = obj.sTitle_Panel_Status;
+            obj.hPanel_Status.Position = [1, 1, obj.nWidth_Panel_Status, obj.nHeight_FigMain];
+            
+            obj.hPanel_Controls = uipanel('Parent', obj.hFig_Main);
+            obj.hPanel_Controls.Title = obj.sTitle_Panel_Controls;
+            obj.hPanel_Controls.Position = [obj.nWidth_Panel_Status, 1, obj.nWidth_Panel_Controls, obj.nHeight_FigMain];
+            
+            % Buttons
+            
+            obj.hButton_Start = uibutton('Parent', obj.hPanel_Controls);
+            obj.hButton_Start.Text = obj.sTitle_Button_Start;
+            obj.hButton_Start.Position = [obj.nDivision_Horizontal, ...
+                obj.nHeight_FigMain-obj.nDivision_Vertical-...
+                obj.nButtonHeight-obj.nTextHeight, obj.nButtonWidth, ...
+                obj.nButtonHeight];
+            obj.hButton_Start.ButtonPushedFcn = @obj.callbackStart;
+            
+            obj.hButton_Stop = uibutton('Parent', obj.hPanel_Controls);
+            obj.hButton_Stop.Text = obj.sTitle_Button_Stop;
+            obj.hButton_Stop.Position = [obj.nDivision_Horizontal, ...
+                obj.nHeight_FigMain-2*obj.nDivision_Vertical-...
+                2*obj.nButtonHeight-obj.nTextHeight, obj.nButtonWidth, ...
+                obj.nButtonHeight];
+            obj.hButton_Stop.ButtonPushedFcn = @obj.callbackStop;
+            
+            % Axes
+            
+            obj.hAxes_Status = uiaxes('Parent', obj.hPanel_Status);
+            obj.hAxes_Status.Position = [1, 1, obj.nWidth_Panel_Status, obj.nHeight_FigMain-obj.nTextHeight];
+            obj.hAxes_Status.XAxis.Visible = 'Off';
+            obj.hAxes_Status.YAxis.Visible = 'Off';
+            
+            % Labels
+            
+            obj.hLabel_Message = uilabel('Parent', obj.hPanel_Status);
+            obj.hLabel_Message.Text = obj.sTitle_Text_Start;
+            obj.hLabel_Message.Position = [(obj.nWidth_Panel_Status-obj.nCalculatingWidth)/2, ...
+                (obj.nHeight_FigMain-obj.nCalculatingHeight)/2, obj.nCalculatingWidth, obj.nCalculatingHeight];
+            obj.hLabel_Message.HorizontalAlignment = 'Center';
+            obj.hLabel_Message.BackgroundColor = [1,1,1];
+
+            obj.hLabel_Counter = uilabel('Parent', obj.hPanel_Status);
+            obj.hLabel_Counter.Text = obj.Counter.getInfo();
+            obj.hLabel_Counter.Position = [obj.nWidth_Panel_Status-obj.nCalculatingWidth-2*obj.nPad_Axes, ...
+                obj.nHeight_FigMain-2*obj.nTextHeight-obj.nPad_Axes, obj.nCalculatingWidth, obj.nCalculatingHeight];
+            obj.hLabel_Counter.HorizontalAlignment = 'Right';
+            
+            obj.setAxes();
+            
+            
+        end
+        
+        function [] = callbackStart(obj, ~, ~)
+            
+            if ~obj.bRun
+                obj.bRun = true;
+                obj.hLabel_Message.Visible = 'Off';
+%                 obj.hCluster = parcluster();
+%                 obj.hJob = createJob(obj.hCluster);
+%                 obj.hTask = createTask(obj.hJob, @obj.performExperiment, 0, {obj});
+%                 submit(obj.hJob);
+            if ~obj.bVerbose
+               warning('Off'); 
+            end
+
+                try
+                    obj.performExperiment();
+                catch error
+                    obj.bRun = true;
+                    obj.hLabel_Message.Text = obj.sTitle_Text_Error;
+                    obj.hLabel_Message.Visible = 'On';
+                    drawnow;
+                    obj.announceError(error);
+                end
+            end
+            
+            warning('On');
+            
+        end
+        
+        function [] = callbackStop(obj, ~, ~)
+            
+            if obj.bRun
+                obj.stopExperiment();
+            end
+            
+        end
+        
+        function [] = stopExperiment(obj)
+            
+            obj.bRun = false;
+            obj.hLabel_Message.Text = obj.sTitle_Text_Termination;
+            obj.hLabel_Message.Visible = 'On';
+            obj.setAxes();
+            drawnow;
+%             cancel(obj.hTask);
+%             obj.hJob.delete;
+            
+        end
+        
+        function [] = updateCounter(obj)
+           
+            obj.Counter.increase();
+            if obj.bVerbose
+                obj.Counter.printInfo();
+            end
+            obj.hLabel_Counter.Text = obj.Counter.getInfo();
+            
+        end
+        
+        function [] = performExperiment(obj)
+            
+            obj.Counter.setCounter(0);
+            
+            % Pre-Allocation of Estimate Vectors
+            obj.vAngles_SRPPHAT = zeros(obj.nAzimuth_Var, 1);
+            obj.vAngles_diagonalUnloading = zeros(obj.nAzimuth_Var, 1);
+            
+            nArrayName      = obj.nArrayName_Var;
+            nSRC            = obj.nSRC_Var;
+            nRIR            = obj.nRIR_Var;
+            nLen            = obj.nLen_Var;
+            nFFT            = obj.nFFTLen_Var;
+            nSNR            = obj.nSNR_Var;
+            nSensors        = obj.nSensors_Var;
+            
+            cArrayName_tmp = obj.cArrayName;
+            vSRC_tmp       = obj.vSRC;
+            vRIR_tmp       = obj.vRIR;
+            vLen_tmp       = obj.vLen_s;
+            vFFTLen_tmp    = obj.vFFTLen;
+            vSNR_tmp       = obj.vSNR;
+            vSensors_tmp   = obj.vSensors;
+            
+            
+            for iArrayName = 1:nArrayName
+                
+                sArrayName_tmp = cArrayName_tmp{iArrayName};
+                
+                for iSRC = 1:nSRC
+                    
+                    nSRC_tmp = vSRC_tmp(iSRC);
+                    
+                    for iRIR = 1:nRIR
+                        
+                        nRIR_tmp = vRIR_tmp(iRIR);
+                        
+                        for iLen = 1:nLen
+                            
+                            nLen_tmp = vLen_tmp(iLen);
+                            
+                            % Obtain Test Signals
+                            obj.getSignal(iSRC, iLen);
+                            
+                            for iFFTLen = 1:nFFT
+                                
+                                nFFTLen_tmp = vFFTLen_tmp(iFFTLen);
+                                
+                                for iSNR = 1:nSNR
+                                    
+                                    nSNR_tmp = vSNR_tmp(iSNR);
+                                    
+                                    for iSensors = 1:nSensors
+                                        
+                                        nSensors_tmp = vSensors_tmp(iSensors);
+                                        
+                                        obj.updateCounter();
+                                        
+                                        % Generate File Name Coding
+                                        sArrayName  = sprintf('ARRAY%s', sArrayName_tmp);
+                                        sFFT        = sprintf('FFT%d', nFFTLen_tmp);
+                                        sSNR        = sprintf('SNR%d', nSNR_tmp);
+                                        sSensors    = sprintf('SENSORS%d', nSensors_tmp);
+                                        sLen        = sprintf('LEN%d', round(1000*nLen_tmp));
+                                        sSRC        = sprintf('SRC%d', nSRC_tmp);
+                                        sRIR        = sprintf('RIR%d', nRIR_tmp);
+                                        
+                                        sFileName   = sprintf('Results_%s_%s_%s_%s_%s_%s_%s.mat', ...
+                                            sArrayName, sSRC, sRIR, sLen, sFFT, sSNR, sSensors);
+                                        
+                                        if ~obj.bRun
+                                            fprintf('Experiment terminated by user.\n');
+                                            return;
+                                        end
+                                        
+                                        if exist(fullfile(obj.sFolder_Output, sFileName), 'file') ~= 2
+                                            
+                                            
+                                             
+                                        
+                                        % Obtain Array
+                                        obj.constructArray(iArrayName, iSensors);
+                                       
+                                        
+                                        
+                                        % Struct carrying Results from each Experiment
+                                        stEstimates = struct('GroundTruth', [], ...
+                                            'DiagonalUnloading', [], 'SRPPHAT', []);
+                                            
+                                            
+                                            
+                                            parfor iAzimuth = 1:obj.nAzimuth_Var
+                                                
+                                                nAzimuth = obj.vAzimuth(iAzimuth);
+                                                
+                                                % Obtain experiment conditions
+                                                obj.positionSignalInRoom(iRIR, iFFTLen, iSensors, iAzimuth);
+                                                obj.setupNoise(iSNR);
+                                                
+                                                % Diagonal Unloading
+                                                vEstimates_diagonalUnloading = obj.rectifyResults(obj.estimateAngle_DiagonalUnloading(iFFTLen, iSensors));
+                                                stEstimates(iAzimuth).DiagonalUnloading = vEstimates_diagonalUnloading;
+                                                
+                                                % SRPPHAT
+                                                vEstimates_SRPPHAT = obj.rectifyResults(obj.estimateAngle_SRPPHAT(iFFTLen, iSensors));
+                                                stEstimates(iAzimuth).SRPPHAT = vEstimates_SRPPHAT;
+                                                
+                                                % Ground Truth
+                                                stEstimates(iAzimuth).GroundTruth = nAzimuth;
+                                                
+                                            end
+                                            
+                                            parsave(fullfile(obj.sFolder_Output, sFileName), stEstimates);
+                                            
+                                        end
+                                        
+                                        obj.plotStatus();
+                                        
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            
+            obj.announceFinished();
+            
+        end
+        
+        function [] = setAxes(obj)
+
+            obj.mStatus = 2 + zeros(obj.nNumVertical, obj.nNumHorizontal);
+            obj.hImage_Status = image(obj.hAxes_Status, obj.mStatus);
+            for iElement = obj.nExperiments_Total+1:numel(obj.mStatus)
+                [y,x] = obj.counterCoordinates(iElement);
+                obj.hImage_Status.CData(y,x) = 1;
+            end
+            vBackGround = obj.hFig_Main.Color;
+            obj.hAxes_Status.Colormap = [vBackGround; 0.8,0,0; 0,0.8,0; 0.8,0.8,0];
+            obj.hAxes_Status.YLim = [0, obj.nNumVertical];
+            obj.hAxes_Status.XLim = [0, obj.nNumHorizontal];
+            drawnow;
+            
+        end
+        
+        function [] = plotStatus(obj)
+
+            nCounter = obj.Counter.getCounter();
+            nMax = obj.nExperiments_Total;
+            
+            [y, x] = counterCoordinates(obj, nCounter);
+            
+            obj.hImage_Status.CData(y, x) = 3;
+            if nCounter < nMax
+                obj.hImage_Status.CData(y, x+1) = 4;  
+            end
+           
+            drawnow limitrate;
+            
+        end
+        
+        function [y, x] = counterCoordinates(obj, nElement)
+            
+            y = floor((nElement-1)/(obj.nNumHorizontal))+1;
+            x = mod((nElement-1), (obj.nNumHorizontal))+1;
+            
+        end
+        
+        function [] = getSignal(obj, iSRC, iLen)
+            
+            if obj.vSRC(iSRC)
+                sSignalSource = 'Source_cut.wav';
+                [vSignalSource, nFs_source] = audioread(sSignalSource);
+                vSignalSource = resample(vSignalSource, nFs_source, obj.nFs_Desired);
+                vSignalSource(floor(obj.vLen_s(iLen)*obj.nFs_Desired)+1:end) = [];
+            else
+                nFrequency = 500;
+                vTime = linspace(0, obj.vLen_s(iLen), obj.nFs_Desired*obj.vLen_s(iLen));
+                vSignalSource = sin(2*pi*nFrequency*vTime) ...
+                    + sin(2*pi*2.1*nFrequency*vTime).^2 ...
+                    + sin(2*pi*5.6*nFrequency*vTime) ...
+                    + 0.1*randn(1, floor(obj.vLen_s(iLen)*obj.nFs_Desired));
+                vSignalSource(end-200:end) = 0;
+            end
+            
+            obj.mSignal_RAW = vSignalSource;
+            
+        end
+        
+        function [] = constructArray(obj, iArrayName, iSensors)
+            
+            mArray = getCoordinates(obj.cArrayName{iArrayName}, obj.vSensors(iSensors));
+            obj.mSensors = mArray + obj.vZero;
+            obj.vZero = obj.mSensors(1,:);
+            
+        end
+        
+        function [] = positionSignalInRoom(obj, iRIR, iFFTLen, iSensors, iAzimuth)
+            
+            vReceiverDeltas_x = getDelays(obj.mSensors, obj.vAzimuth(iAzimuth), obj.nC);
+            mSignalReceive = zeros(length(obj.mSignal_RAW), obj.vSensors(iSensors));
+            
+            % Calculate the position of the source [x, y, z] (m)
+            vSourcePosition = obj.vZero + [-obj.nDistance*cos(obj.vAzimuth(iAzimuth)), ...
+                obj.nDistance*sin(obj.vAzimuth(iAzimuth)), 0.7];
+            
+            if obj.vRIR(iRIR)
+                % Generate room impulse responses
+                [h, ~] = rir_generator(obj.nC, obj.nFs_Desired, obj.mSensors, ...
+                    vSourcePosition, obj.vRoomDimensions, obj.nBeta, obj.nSamples);
+                % Suppress generic text output
+                %                         fprintf(repmat('\b', 1, 129+17));
+                
+                mSignalReceive = zeros(length(obj.mSignal_RAW), obj.vSensors(iSensors));
+                for iChannel = 1:obj.vSensors(iSensors)
+                    mSignalReceive(:, iChannel) = ...
+                        fftfilt(h(iChannel, :), obj.mSignal_RAW);
+                end
+            else
+                % Generate Artificial Delays
+                % Time delay of arrival (TDOA)
+                vTau = vReceiverDeltas_x;
+                for iChannel = 1:obj.vSensors(iSensors)
+                    mSignalReceive(:, iChannel) = ...
+                        resample(circshift(resample(...
+                        obj.mSignal_RAW, 100, 1), round(...
+                        100*vTau(iChannel)*obj.nFs_Desired),1), 1, 100);
+                end
+            end
+            
+            obj.nPad = 0.5*obj.vFFTLen(iFFTLen);
+            
+            mSignalReceive(1:obj.nPad, :) = [];
+            obj.mSignal = mSignalReceive;
+            
+        end
+        
+        function [] = setupNoise(obj, iSNR)
+            
+            mNoise = randn(size(obj.mSignal));
+            nPowerSignal = 10*log10(rms(mean(obj.mSignal, 2)));
+            nPowerNoise = 10*log10(rms(mean(mNoise, 2)));
+            
+            obj.mSignal = obj.mSignal + mNoise*10^((nPowerSignal - ...
+                obj.vSNR(iSNR)-nPowerNoise)/10);
+            
+        end
+        
+        function [] = announceFinished(obj)
+            nTime = toc;
+            if obj.bEmail
+                obj.Email.send(obj.sEmail_Adress, obj.sEmail_Head_Success, sprintf(obj.sEmail_Message_Success, num2str(nTime)));
+            end
+        end
+        
+        function [] = announceError(obj, error)
+            
+            sError = '';
+            nError = length(error.stack);
+            for iError = 1:nError
+               sError = sprintf('%s\n%s\n\t%s\n\t\tline %s\n', sError, error.stack(iError).file, ...
+                    error.stack(iError).name, num2str(error.stack(iError).line)); 
+            end
+            
+            sTmp = sprintf('%s\n\n%s\n\n%s\n\n%s', obj.sEmail_Message_Error, error.identifier, error.message, sError);
+            if obj.bEmail
+                obj.Email.send(obj.sEmail_Adress, obj.sEmail_Head_Error, sTmp);
+            end
+        end
+        
+        function [vAngles] = rectifyResults(obj, vAngles)
+            nThreshold = 200;
+            vAngles(vAngles>nThreshold) = 360-vAngles(vAngles>nThreshold);
+        end
+        
+        function vAngles = estimateAngle_DiagonalUnloading(obj, iFFTLen, iSensors)
+            
+            % Hann Window for Block Processing
+            vWindow = hann(obj.vFFTLen(iFFTLen));
+            % Number of possible Theta Candidates
+            nTheta = 360;
+            vTheta = linspace(0, 2*pi*(nTheta-1)/nTheta, nTheta);
+            
+            % Freuquency Vector [Hz]
+            vFrequency = linspace(0, obj.nFs_Desired, obj.vFFTLen(iFFTLen));
+            
+            % Recursion factor
+            nAlpha = 0.9;
+            
+            nBlockSize = obj.vFFTLen(iFFTLen);
+            nHopSize = nBlockSize;
+            nBlocks = floor((size(obj.mSignal, 1) - nBlockSize)/nHopSize);
+            
+            mSpec = zeros(obj.vSensors(iSensors), obj.vFFTLen(iFFTLen));
+            mPSD = zeros(obj.vSensors(iSensors), obj.vSensors(iSensors), obj.vFFTLen(iFFTLen)/2+1);
+            
+            vAngles = zeros(nBlocks, 1);
+            vPAbsSum = zeros(nTheta, 1);
+            
+            for iBlock = 1:nBlocks
+                
+                iIn = (iBlock - 1)*nHopSize + 1;
+                iOut = iIn + nBlockSize - 1;
+                
+                % Fourier Transform of all Audio Signals
+                for iMic = 1:obj.vSensors(iSensors)
+                    mSpec(iMic, :) = fft(obj.mSignal(iIn:iOut, iMic).*vWindow, obj.vFFTLen(iFFTLen));
+                end
+                
+                % Creation of PSD (only first Block for now)
+                for iFreq = 1:obj.vFFTLen(iFFTLen)/2+1
+                    if iBlock == 1
+                        mPSD(:, :, iFreq) = mSpec(:, iFreq)*mSpec(:, iFreq)';
+                    else
+                        mPSD(:, :, iFreq) = (1-nAlpha)*mSpec(:, iFreq)*mSpec(:, iFreq)' + nAlpha*mPSD(:, :, iFreq);
+                    end
+                end
+                
+                % Simulation of multiple possible Theta Candidates (argmax)
+                for iTheta = 1:nTheta
+                    
+                    vA = zeros(obj.vSensors(iSensors), obj.vFFTLen(iFFTLen)/2+1);
+                    vP = zeros(obj.vFFTLen(iFFTLen)/2+1, 1);
+                    
+                    vTau_Theta = getDelays(obj.mSensors, vTheta(iTheta), obj.nC);
+                    
+                    % Creation of Steering Vector
+                    for iMic = 1:obj.vSensors(iSensors)
+                        vA(iMic, :) = exp(-1j*2*pi*vFrequency(1:obj.vFFTLen(iFFTLen)/2+1).*vTau_Theta(iMic));
+                    end
+                    
+                    % Power Formula #27
+                    for iFreq = 1:obj.vFFTLen(iFFTLen)/2+1
+                        nTrace = trace(mPSD(:, :, iFreq));
+                        vP(iFreq) = 1/(vA(:, iFreq)' * (nTrace*eye(obj.vSensors(iSensors)) - mPSD(:, :, iFreq)) * vA(:, iFreq));
+                    end
+                    
+                    % Summation over all FFT-Bins
+                    vPAbsSum(iTheta) = sum(vP);
+                    
+                end
+                
+                % Search for Maximum
+                [~, arg] = max(vPAbsSum);
+                vAngles(iBlock) = arg;
+                
+            end
+            
+        end
+        
+        function vAngles = estimateAngle_SRPPHAT(obj, iFFTLen, iSensors)
+            
+            % Hann Window for Block Processing
+            vWindow = hann(obj.vFFTLen(iFFTLen));
+            obj.mWindow = repmat(vWindow, 1, obj.vSensors(iSensors));
+            % Number of possible Theta Candidates
+            nTheta = 180;
+            vTheta = linspace(0, pi*(nTheta-1)/nTheta, nTheta);
+            
+            % Freuquency Vector [Hz]
+            vFrequency = linspace(0, obj.nFs_Desired, obj.vFFTLen(iFFTLen));
+            
+            nBlockSize = obj.vFFTLen(iFFTLen);
+            nHopSize = nBlockSize;
+            nBlocks = floor((size(obj.mSignal, 1) - nBlockSize)/nHopSize);
+            
+            vAngles = zeros(nBlocks, 1);
+            
+            for iBlock = 1:nBlocks
+                
+                iIn = (iBlock - 1)*nHopSize + 1;
+                iOut = iIn + nBlockSize - 1;
+                mSignalFrame = obj.mSignal(iIn:iOut, :);
+                mSpecFrame = fft(mSignalFrame.*obj.mWindow);
+                
+                vTestTheta = zeros(nTheta, obj.vFFTLen(iFFTLen));
+                
+                for iTheta = 1:nTheta
+                    
+                    vDelays = getDelays(obj.mSensors, vTheta(iTheta), obj.nC);
+                    
+                    vP = zeros(obj.vFFTLen(iFFTLen), 1);
+                    
+                    for iMic1 = 1:obj.vSensors(iSensors)
+                        vSpec1 = mSpecFrame(:, iMic1);
+                        for iMic2 = iMic1:obj.vSensors(iSensors)
+                            vSpec2 = mSpecFrame(:, iMic2);
+                            vP = vP + ifft(exp(1i* (angle(vSpec1) - angle(vSpec2) + (vDelays(iMic1) - vDelays(iMic2)).*vFrequency'*2*pi)));
+                        end
+                    end
+                    vTestTheta(iTheta, :) = vP;
+                end
+                [~, vAngles(iBlock)] = max(sum(abs(vTestTheta),2));
+                
+            end
+            
+        end
+        
+    end
+    
+end
+
+% End of File
