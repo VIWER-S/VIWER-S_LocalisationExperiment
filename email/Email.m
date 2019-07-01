@@ -11,6 +11,7 @@ classdef Email < handle
         
         function [obj] = Email()
             
+            % not shared
             stData = getEmailData();
             setpref('Internet','E_mail', stData.E_mail);
             setpref('Internet','SMTP_Server', stData.SMTP_Server)
